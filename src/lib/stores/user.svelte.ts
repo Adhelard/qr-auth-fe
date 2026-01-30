@@ -1,30 +1,27 @@
-// src/lib/stores/user.svelte.ts
 import { browser } from '$app/environment';
-
-export interface User {
-    id: number;
-    name: string;
-    email: string;
-    role: 'admin' | 'merchant';
-}
+// Import User dari file types agar sinkron
+import type { User } from '$lib/types'; 
 
 class UserState {
-    // $state: Menyimpan token & user. Jika berubah, UI otomatis update.
+    // State: Menyimpan token & user. 
     token = $state<string | null>(null);
-    user = $state<User | null>(null);
+    user = $state<User | null>(null); // Sekarang User ini punya properti .merchant
 
     constructor() {
         if (browser) {
-            // Ambil dari localStorage saat aplikasi dimuat
             this.token = localStorage.getItem('token');
             const storedUser = localStorage.getItem('user');
             if (storedUser) {
-                this.user = JSON.parse(storedUser);
+                try {
+                    this.user = JSON.parse(storedUser);
+                } catch (e) {
+                    console.error("Gagal parse user data", e);
+                    this.logout(); // Reset jika data corrupt
+                }
             }
         }
     }
 
-    // Method login: simpan ke state & localStorage
     login(token: string, userData: User) {
         this.token = token;
         this.user = userData;
@@ -35,7 +32,6 @@ class UserState {
         }
     }
 
-    // Method logout: hapus data
     logout() {
         this.token = null;
         this.user = null;
@@ -45,11 +41,14 @@ class UserState {
         }
     }
 
-    // Getter untuk mengecek apakah sedang login
     get isAuthenticated() {
         return !!this.token;
     }
+    
+    // Helper untuk mengambil plan type dengan aman
+    get currentPlan() {
+        return this.user?.merchant?.plan_type || 'basic';
+    }
 }
 
-// Export sebagai singleton
 export const userState = new UserState();

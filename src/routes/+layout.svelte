@@ -1,9 +1,5 @@
 <script lang="ts">
-    // Pastikan path-nya benar!
-    // Jika layout ada di src/routes/, dan css ada di src/app.css
-    // Maka gunakan ../app.css
-    import '../app.css'; 
-
+    import '../app.css'; // <--- JANGAN SAMPAI LUPA INI
     let { children } = $props();
 </script>
 
