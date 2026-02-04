@@ -1,290 +1,314 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { fade, fly } from 'svelte/transition';
-    import { api } from '$lib/services/api';
     import { userState } from '$lib/stores/user.svelte';
+    import { api } from '$lib/services/api';
+    import { fade, scale } from 'svelte/transition';
 
-    // State menggunakan Runes
-    let isLoading = $state(true);
+    let isLoading = $state(false);
     let isSaving = $state(false);
-    let errorMessage = $state('');
-    let successMessage = $state('');
+    let showGuide = $state(false); // State untuk modal panduan
 
-    // State Form
-    let form = $state({
+    let formData = $state({
         name: '',
         company_name: '',
-        email: '', 
-        slug: '',
-        logo_url: '' as string | null
+        slug: '', // Read-only biasanya
+        phone: '',
+        address: '',
+        logo_url: ''
     });
 
-    // State untuk File Upload
-    let selectedFile: File | null = null;
-    let previewUrl: string | null = $state(null);
-    let fileInput: HTMLInputElement; // Binding ke elemen input
+    let logoFile: File | null = null;
+    let logoPreview = $state<string | null>(null);
 
     onMount(async () => {
+        // --- HOOK OTOMATIS (Profile) ---
+        const hasSeenGuide = localStorage.getItem('profile_guide_seen_v1');
+        if (!hasSeenGuide) {
+            setTimeout(() => {
+                showGuide = true;
+                localStorage.setItem('profile_guide_seen_v1', 'true');
+            }, 1000);
+        }
+        // ------------------------------
+
+        isLoading = true;
         try {
-            const res = await api('/merchant/profile');
-            // Mapping response ke form
-            const data = res.data || res;
-            form = {
-                name: data.name || '',
-                company_name: data.company_name || '',
-                email: data.email || '',
-                slug: data.slug || '',
-                logo_url: data.logo_url || null
+            const user = await api('/merchant/profile'); 
+            // Sesuaikan mapping data dengan response backend Anda
+            formData = {
+                name: user.name || '',
+                company_name: user.company_name || '',
+                slug: user.slug || '',
+                phone: user.phone || '',
+                address: user.address || '',
+                logo_url: user.logo_url || ''
             };
-            
-            if (form.logo_url) {
-                previewUrl = form.logo_url;
+            if(formData.logo_url) {
+                logoPreview = formData.logo_url;
             }
         } catch (e) {
             console.error(e);
-            errorMessage = 'Gagal memuat data profil.';
         } finally {
             isLoading = false;
         }
     });
 
-    function handleFileSelect(event: Event) {
-        const input = event.target as HTMLInputElement;
+    function handleFileChange(e: Event) {
+        const input = e.target as HTMLInputElement;
         if (input.files && input.files[0]) {
-            const file = input.files[0];
-
-            // Validasi sederhana (Max 2MB)
-            if (file.size > 2 * 1024 * 1024) {
-                alert("Ukuran file terlalu besar (Maksimal 2MB)");
-                return;
-            }
-
-            selectedFile = file;
-            previewUrl = URL.createObjectURL(selectedFile);
+            logoFile = input.files[0];
+            logoPreview = URL.createObjectURL(logoFile);
         }
     }
 
-    function triggerFileInput() {
-        fileInput.click();
-    }
-
-    async function handleSave(e: Event) {
-        e.preventDefault();
+    async function handleSubmit() {
         isSaving = true;
-        errorMessage = '';
-        successMessage = '';
-
         try {
-            const formData = new FormData();
+            // Gunakan FormData untuk upload file
+            const data = new FormData();
+            data.append('name', formData.name);
+            data.append('company_name', formData.company_name);
+            data.append('phone', formData.phone);
+            data.append('address', formData.address);
             
-            // Trik Laravel: Gunakan POST tapi spoof method menjadi PUT/PATCH agar file terbaca
-            formData.append('_method', 'POST'); // Atau 'PUT' tergantung route backend Anda
-            
-            formData.append('name', form.name);
-            formData.append('company_name', form.company_name);
-
-            if (selectedFile) {
-                formData.append('logo', selectedFile);
+            if (logoFile) {
+                data.append('logo', logoFile);
             }
 
-            // Kita gunakan fetch native untuk kontrol penuh atas headers
-            // URL disesuaikan (pastikan port backend benar, misal 8000)
-            const response = await fetch('http://localhost:8000/api/merchant/profile', {
-                method: 'POST', 
-                headers: {
-                    'Authorization': `Bearer ${userState.token}`,
-                    'Accept': 'application/json'
-                    // PENTING: Jangan set Content-Type secara manual saat pakai FormData!
-                    // Browser akan otomatis set multipart/form-data + boundary
-                },
-                body: formData
+            // Method Spoofing jika backend Laravel resource butuh PUT
+            data.append('_method', 'PUT'); 
+
+            await api('/merchant/profile', {
+                method: 'POST', // Gunakan POST dengan _method: PUT untuk upload file
+                body: data,
+                // Jangan set Content-Type header secara manual saat pakai FormData, 
+                // browser akan otomatis set boundary.
+                headers: {} 
             });
 
-            const result = await response.json();
-
-            if (!response.ok) {
-                // Handle validasi error dari Laravel
-                if (result.errors) {
-                    const firstError = Object.values(result.errors)[0] as string[];
-                    throw new Error(firstError[0]);
-                }
-                throw new Error(result.message || 'Gagal menyimpan profil');
-            }
-
-            successMessage = 'Profil berhasil diperbarui!';
+            alert('Profil berhasil diperbarui!');
             
-            // Update global user state agar navbar/sidebar berubah real-time
-            if (userState.user) {
-                userState.user.name = form.name;
-                // Jika backend mengembalikan URL logo baru, update juga
-                if (result.data?.logo_url) {
-                    userState.user.logo_url = result.data.logo_url;
-                }
+            // Update global state user jika nama berubah
+            if(userState.user) {
+                userState.user.name = formData.name;
             }
-
-            // Hilangkan pesan sukses setelah 3 detik
-            setTimeout(() => successMessage = '', 3000);
 
         } catch (e: any) {
-            errorMessage = e.message || 'Terjadi kesalahan sistem.';
+            alert(e.message || 'Gagal menyimpan profil');
         } finally {
             isSaving = false;
         }
     }
 </script>
 
-<div class="max-w-full mx-auto px-4 py-8">
-    <div class="mb-8">
-        <h1 class="text-3xl font-bold text-gray-900 tracking-tight">Pengaturan Profil</h1>
-        <p class="text-gray-500 mt-2">Kelola informasi perusahaan dan branding Anda.</p>
+<svelte:head>
+    <title>Profil Perusahaan - {userState.user?.name}</title>
+</svelte:head>
+
+<div class="max-w-4xl mx-auto space-y-6 animate-[fadeIn_0.5s_ease-out]">
+
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900">Profil Perusahaan</h1>
+            <p class="text-slate-500 text-sm mt-1">Informasi ini akan tampil pada halaman verifikasi produk Anda.</p>
+        </div>
+        
+        <button 
+            onclick={() => showGuide = true}
+            class="inline-flex items-center justify-center px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg text-sm font-medium transition shadow-sm"
+        >
+            <svg class="w-4 h-4 mr-2 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Panduan Profil
+        </button>
     </div>
 
-    {#if isLoading}
-        <div class="flex items-center justify-center p-12 bg-white rounded-2xl shadow-sm border border-gray-100 animate-pulse">
-            <div class="h-8 w-8 bg-gray-200 rounded-full mr-3"></div>
-            <span class="text-gray-400 font-medium">Memuat data profil...</span>
-        </div>
-    {:else}
-        {#if errorMessage}
-            <div transition:fade class="mb-6 p-4 bg-red-50 border border-red-100 text-red-700 rounded-xl flex items-center gap-3">
-                <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                {errorMessage}
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8">
+        {#if isLoading}
+            <div class="flex justify-center py-12">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
             </div>
-        {/if}
-
-        {#if successMessage}
-            <div transition:fade class="mb-6 p-4 bg-green-50 border border-green-100 text-green-700 rounded-xl flex items-center gap-3">
-                <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                {successMessage}
-            </div>
-        {/if}
-
-        <form onsubmit={handleSave} class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            
-            <div class="h-40 bg-gradient-to-r from-blue-600 to-indigo-700 relative">
-                <div class="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
-            </div>
-            
-            <div class="px-8 pb-10">
-                <div class="relative -mt-16 mb-8 flex flex-col sm:flex-row items-end sm:items-center gap-6">
-                    <div class="relative group">
-                        <div class="w-32 h-32 rounded-2xl bg-white p-1.5 shadow-xl border border-gray-100 overflow-hidden relative">
-                            {#if previewUrl}
-                                <img src={previewUrl} alt="Logo Perusahaan" class="w-full h-full object-cover rounded-xl bg-gray-50">
-                            {:else}
-                                <div class="w-full h-full bg-gray-50 rounded-xl flex items-center justify-center text-gray-300">
-                                    <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                                </div>
-                            {/if}
-
-                            <button 
-                                type="button"
-                                onclick={triggerFileInput}
-                                class="absolute inset-0 bg-black/40 flex flex-col items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-all duration-200 cursor-pointer rounded-xl backdrop-blur-[2px]"
-                            >
-                                <svg class="w-8 h-8 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg>
-                                <span class="text-xs font-medium">Ubah Foto</span>
-                            </button>
-                        </div>
-
-                        <input 
-                            bind:this={fileInput}
-                            type="file" 
-                            accept="image/png, image/jpeg, image/jpg" 
-                            class="hidden" 
-                            onchange={handleFileSelect}
-                        >
+        {:else}
+            <form class="space-y-8" onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+                
+                <div class="flex flex-col sm:flex-row gap-6 items-start border-b border-slate-100 pb-8">
+                    <div class="w-full sm:w-1/3">
+                        <label class="block text-sm font-bold text-slate-900 mb-1">Logo Perusahaan</label>
+                        <p class="text-xs text-slate-500">Akan tampil di pojok kiri atas saat konsumen scan QR.</p>
                     </div>
-
-                    <div class="mb-2">
-                        <h2 class="text-xl font-bold text-gray-900">{form.company_name || 'Nama Perusahaan'}</h2>
-                        <p class="text-sm text-gray-500">{form.slug ? `qrverify.com/${form.slug}` : 'Belum ada slug'}</p>
+                    <div class="w-full sm:w-2/3 flex items-center gap-6">
+                        <div class="relative w-24 h-24 rounded-full bg-slate-100 border-2 border-slate-200 flex items-center justify-center overflow-hidden shrink-0 group">
+                            {#if logoPreview}
+                                <img src={logoPreview} alt="Logo Preview" class="w-full h-full object-cover" />
+                            {:else}
+                                <svg class="w-10 h-10 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            {/if}
+                            
+                            <div class="absolute inset-0 bg-slate-900/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition cursor-pointer" onclick={() => document.getElementById('logoInput')?.click()}>
+                                <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <input 
+                                type="file" 
+                                id="logoInput" 
+                                accept="image/*" 
+                                class="hidden" 
+                                onchange={handleFileChange}
+                            />
+                            <button type="button" onclick={() => document.getElementById('logoInput')?.click()} class="text-sm font-medium text-brand-600 hover:text-brand-700 border border-brand-200 bg-brand-50 px-3 py-1.5 rounded-lg transition">
+                                Upload Logo Baru
+                            </button>
+                            <p class="text-xs text-slate-400 mt-2">JPG, PNG, atau SVG. Maks 2MB.</p>
+                        </div>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-                    <div class="space-y-1">
-                        <label class="block text-sm font-semibold text-gray-700">Nama Pemilik</label>
-                        <div class="relative">
+                <div class="flex flex-col sm:flex-row gap-6 items-start">
+                    <div class="w-full sm:w-1/3">
+                        <label class="block text-sm font-bold text-slate-900 mb-1">Identitas Perusahaan</label>
+                        <p class="text-xs text-slate-500">Nama brand resmi yang digunakan.</p>
+                    </div>
+                    <div class="w-full sm:w-2/3 space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-700 mb-1">Nama Perusahaan / Brand</label>
                             <input 
-                                bind:value={form.name} 
                                 type="text" 
-                                placeholder="Nama lengkap Anda"
-                                class="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                            >
-                            <svg class="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                                bind:value={formData.company_name} 
+                                class="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                                placeholder="Contoh: PT. Makmur Jaya Abadi"
+                            />
+                        </div>
+                         <div class="grid grid-cols-2 gap-4">
+                             <div>
+                                <label class="block text-xs font-medium text-slate-700 mb-1">Nama Penanggung Jawab</label>
+                                <input 
+                                    type="text" 
+                                    bind:value={formData.name} 
+                                    class="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                                />
+                            </div>
+                             <div>
+                                <label class="block text-xs font-medium text-slate-700 mb-1">No. Telepon / CS</label>
+                                <input 
+                                    type="text" 
+                                    bind:value={formData.phone} 
+                                    class="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                                    placeholder="+62..."
+                                />
+                            </div>
+                        </div>
+                         <div>
+                            <label class="block text-xs font-medium text-slate-700 mb-1">Alamat Kantor</label>
+                            <textarea 
+                                bind:value={formData.address} 
+                                rows="3"
+                                class="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                                placeholder="Alamat lengkap..."
+                            ></textarea>
                         </div>
                     </div>
+                </div>
 
-                    <div class="space-y-1">
-                        <label class="block text-sm font-semibold text-gray-700">Email Login</label>
-                        <div class="relative">
-                            <input 
-                                value={form.email} 
-                                type="text" 
-                                disabled 
-                                class="w-full pl-10 pr-4 py-2.5 bg-gray-100 border border-gray-200 rounded-lg text-gray-500 cursor-not-allowed select-none"
-                            >
-                            <svg class="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                        </div>
+                <div class="flex flex-col sm:flex-row gap-6 items-start border-t border-slate-100 pt-8">
+                    <div class="w-full sm:w-1/3">
+                        <label class="block text-sm font-bold text-slate-900 mb-1">URL Publik</label>
+                        <p class="text-xs text-slate-500">Link unik untuk halaman verifikasi brand Anda.</p>
                     </div>
-
-                    <div class="md:col-span-2 space-y-1">
-                        <label class="block text-sm font-semibold text-gray-700">Nama Brand / Perusahaan</label>
-                        <div class="relative">
-                            <input 
-                                bind:value={form.company_name} 
-                                type="text" 
-                                placeholder="Contoh: PT Teknologi Maju Jaya"
-                                class="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                            >
-                            <svg class="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-                        </div>
-                        <p class="text-xs text-gray-500 pt-1 ml-1">Nama ini akan ditampilkan pada halaman verifikasi publik.</p>
-                    </div>
-
-                    <div class="md:col-span-2 space-y-1">
-                        <label class="block text-sm font-semibold text-gray-700">URL Verifikasi</label>
-                        <div class="flex items-center group">
-                            <span class="bg-gray-100 border border-r-0 border-gray-300 px-4 py-2.5 rounded-l-lg text-gray-500 text-sm font-medium group-hover:border-gray-400 transition-colors">
-                                qrverify.com/
+                    <div class="w-full sm:w-2/3">
+                        <div class="flex items-center">
+                            <span class="bg-slate-100 border border-r-0 border-slate-300 text-slate-500 sm:text-sm text-xs px-3 py-2 rounded-l-lg">
+                                qrverify.com/verify/
                             </span>
                             <input 
-                                value={form.slug} 
                                 type="text" 
-                                disabled 
-                                class="w-full px-4 py-2.5 border border-gray-300 bg-gray-50/50 rounded-r-lg text-gray-600 font-medium cursor-not-allowed group-hover:border-gray-400 transition-colors"
-                            >
+                                value={formData.slug} 
+                                readonly
+                                class="w-full px-4 py-2 border border-slate-300 rounded-r-lg text-sm bg-slate-50 text-slate-500 cursor-not-allowed"
+                            />
                         </div>
+                        <p class="text-[10px] text-slate-400 mt-1">*Hubungi admin jika ingin mengubah URL slug ini.</p>
                     </div>
                 </div>
 
-                <div class="pt-8 mt-8 border-t border-gray-100 flex items-center justify-end gap-3">
-                    <button 
-                        type="button" 
-                        class="px-5 py-2.5 text-gray-600 font-medium hover:bg-gray-50 rounded-lg transition-colors"
-                        onclick={() => window.location.reload()}
-                    >
-                        Batal
-                    </button>
+                <div class="flex justify-end pt-4">
                     <button 
                         type="submit" 
-                        disabled={isSaving} 
-                        class="px-8 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md shadow-indigo-200 transition-all transform active:scale-95 disabled:opacity-70 disabled:active:scale-100 flex items-center gap-2"
+                        disabled={isSaving}
+                        class="px-6 py-2.5 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition shadow-lg shadow-slate-900/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
                     >
                         {#if isSaving}
-                            <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
+                            <svg class="animate-spin -ml-1 mr-3 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                             Menyimpan...
                         {:else}
-                            <span>Simpan Perubahan</span>
+                            Simpan Perubahan
                         {/if}
                     </button>
                 </div>
 
-            </div>
-        </form>
-    {/if}
+            </form>
+        {/if}
+    </div>
 </div>
+
+{#if showGuide}
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6" transition:fade={{ duration: 200 }}>
+        <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onclick={() => showGuide = false}></div>
+        
+        <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col" transition:scale={{ start: 0.95, duration: 200 }}>
+            <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                    Panduan Profil Perusahaan
+                </h2>
+                <button onclick={() => showGuide = false} class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1 transition">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+            </div>
+
+            <div class="p-6 overflow-y-auto space-y-6 text-sm text-slate-600">
+                
+                <p>
+                    Halaman ini digunakan untuk mengatur informasi publik yang akan dilihat konsumen saat mereka memindai kode QR Anda.
+                </p>
+
+                <div class="space-y-4">
+                    <div class="flex gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
+                        <div class="shrink-0 text-brand-600 bg-white p-2 rounded-lg shadow-sm h-10 w-10 flex items-center justify-center">
+                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        </div>
+                        <div>
+                            <strong class="text-slate-900 block text-base">Pentingnya Logo</strong>
+                            <p class="mt-1 leading-relaxed">
+                                Logo yang Anda upload di sini akan muncul di bagian paling atas halaman hasil scan. Pastikan logo terlihat profesional dan memiliki latar belakang transparan (PNG) agar menyatu dengan desain.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
+                        <div class="shrink-0 text-brand-600 bg-white p-2 rounded-lg shadow-sm h-10 w-10 flex items-center justify-center">
+                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                        </div>
+                        <div>
+                            <strong class="text-slate-900 block text-base">Tentang URL Slug</strong>
+                            <p class="mt-1 leading-relaxed">
+                                URL Slug (misal: <code>/verify/adidas</code>) dibuat otomatis saat pendaftaran. Ini memastikan tidak ada brand lain yang bisa memalsukan identitas digital Anda. Jika ingin mengubahnya, silakan hubungi tim support.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 text-right">
+                <button onclick={() => showGuide = false} class="px-4 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition shadow-lg shadow-slate-900/10">
+                    Selesai
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}

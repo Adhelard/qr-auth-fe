@@ -18,41 +18,44 @@
         total: 0,
         from: 0,
         to: 0,
-        per_page: 100 // Sesuai backend
+        per_page: 100 
     });
 
     async function loadData(page = 1) {
-        isLoading = true; // Show loading effect on table
+        isLoading = true;
         try {
-            // 1. Ambil Detail Batch (Hanya sekali saat mount pertama)
+            // 1. Ambil Detail Batch
             if (!batch) {
                 const res = await api(`/qr-batches/${batchId}`);
                 batch = res.data || res;
             }
             
-            // 2. Ambil List QR Codes dengan Pagination
+            // 2. Ambil List QR Codes
             const qrRes = await api(`/qr-codes?batch_id=${batchId}&page=${page}`);
             
-            // Laravel Pagination Response Structure
-            qrCodes = qrRes.data; 
-            pagination = {
-                current_page: qrRes.current_page,
-                last_page: qrRes.last_page,
-                total: qrRes.total,
-                from: qrRes.from,
-                to: qrRes.to,
-                per_page: qrRes.per_page
-            };
+            // Handle struktur pagination Laravel yang mungkin dibungkus .data atau langsung
+            const responseData = qrRes.data || qrRes; // Jaga-jaga jika pagination di root
 
+            qrCodes = responseData.data || responseData; // Array QR codes
+            
+            // Update pagination state dengan fallback
+            pagination = {
+                current_page: qrRes.current_page || 1,
+                last_page: qrRes.last_page || 1,
+                total: qrRes.total || 0,
+                from: qrRes.from || 0,
+                to: qrRes.to || 0,
+                per_page: qrRes.per_page || 100
+            };
+            
         } catch (e) {
             console.error(e);
-            alert('Gagal memuat data');
+            // Jangan alert di loadData agar tidak spam saat mount
         } finally {
             isLoading = false;
         }
     }
 
-    // Function ganti halaman
     function changePage(newPage: number) {
         if (newPage >= 1 && newPage <= pagination.last_page) {
             loadData(newPage);
@@ -61,10 +64,16 @@
 
     onMount(() => loadData(1));
 
-    // ... (Fungsi handleDownloadZip TETAP SAMA seperti sebelumnya) ...
     async function handleDownloadZip() {
+        if(!batch) return;
         isDownloading = true;
+        
+        // FIX: Gunakan nama batch yang tersedia
+        const safeName = (batch.batch_name || batch.batch_number || 'Batch').replace(/\s+/g, '_');
+        
         try {
+            // Gunakan API service yang sudah ada fitur auth header-nya agar lebih rapi
+            // Tapi karena responseType blob, kita pakai fetch manual dengan userState.token
             const response = await fetch(`http://localhost:8000/api/qr-batches/${batchId}/download-zip`, {
                 method: 'GET',
                 headers: {
@@ -78,9 +87,7 @@
                 try {
                     const errorData = await response.json();
                     errorMsg = errorData.message || errorData.error || errorMsg;
-                } catch (jsonError) {
-                    errorMsg = `Error ${response.status}: ${response.statusText}`;
-                }
+                } catch (e) { /* ignore json parse error */ }
                 throw new Error(errorMsg);
             }
 
@@ -88,12 +95,11 @@
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${batch.batch_name.replace(/\s+/g, '_')}_QR.zip`; 
+            a.download = `${safeName}_QR.zip`; 
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
-
         } catch (e: any) {
             alert('Gagal: ' + e.message);
         } finally {
@@ -107,19 +113,31 @@
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
     </div>
 {:else if batch}
-    <div class="mb-8 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+    <div class="mb-8 bg-white p-6 rounded-2xl shadow-sm border border-gray-100 animate-[fadeIn_0.3s_ease-out]">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div>
                 <div class="flex items-center gap-2 mb-2">
-                    <span class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-brand-100 text-brand-700">BATCH #{batch.id}</span>
-                    <span class="text-sm text-gray-500">{new Date(batch.created_at).toLocaleDateString()}</span>
+                    <span class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-brand-100 text-brand-700">
+                        BATCH #{batch.batch_number || batch.id}
+                    </span>
+                    <span class="text-sm text-gray-500">
+                        {new Date(batch.created_at).toLocaleDateString('id-ID', { dateStyle: 'long' })}
+                    </span>
                 </div>
-                <h1 class="text-3xl font-extrabold text-gray-900">{batch.batch_name}</h1>
+                
+                <h1 class="text-3xl font-extrabold text-gray-900">
+                    {batch.batch_name || batch.batch_number || 'Batch Tanpa Nama'}
+                </h1>
+                
                 <div class="mt-2 text-gray-600 flex items-center gap-2">
                     <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
-                    Produk: <span class="font-semibold text-gray-900">{batch.product?.name}</span>
+                    Produk: 
+                    <span class="font-semibold text-gray-900">
+                        {batch.product_name || batch.product?.name || 'Produk Tidak Diketahui'}
+                    </span>
                 </div>
             </div>
+        
             <div>
                 <button onclick={handleDownloadZip} disabled={isDownloading} class="w-full md:w-auto flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-brand-500/20 transition transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
                     {#if isDownloading}
@@ -134,9 +152,9 @@
         </div>
 
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-gray-100">
-            <div><div class="text-xs text-gray-500 uppercase font-semibold">Total Qty</div><div class="text-xl font-bold text-gray-900">{batch.quantity}</div></div>
+            <div><div class="text-xs text-gray-500 uppercase font-semibold">Total Qty</div><div class="text-xl font-bold text-gray-900">{batch.quantity || 0}</div></div>
             <div><div class="text-xs text-gray-500 uppercase font-semibold">Status</div><div class="text-xl font-bold text-green-600">Generated</div></div>
-            <div><div class="text-xs text-gray-500 uppercase font-semibold">Scanned</div><div class="text-xl font-bold text-blue-600">0</div></div>
+            <div><div class="text-xs text-gray-500 uppercase font-semibold">Scanned</div><div class="text-xl font-bold text-blue-600">{batch.scanned_count || 0}</div></div>
             <div><div class="text-xs text-gray-500 uppercase font-semibold">Limit</div><div class="text-xl font-bold text-gray-400">{pagination.per_page}/page</div></div>
         </div>
     </div>
@@ -150,7 +168,7 @@
 
         <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
             <h3 class="font-bold text-gray-800">Daftar Kode QR</h3>
-            <span class="text-xs text-gray-500">Menampilkan {pagination.from}-{pagination.to} dari {pagination.total} data</span>
+            <span class="text-xs text-gray-500">Menampilkan {pagination.from || 0}-{pagination.to || 0} dari {pagination.total || 0} data</span>
         </div>
         
         {#if qrCodes.length > 0}
@@ -203,32 +221,21 @@
             </div>
 
             <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
-                
                 <div class="text-xs text-gray-500 md:hidden">
                     Halaman {pagination.current_page} / {pagination.last_page}
                 </div>
-
                 <div class="hidden md:block text-xs text-gray-500">
                     Menampilkan <strong>{pagination.from}</strong> sampai <strong>{pagination.to}</strong> dari <strong>{pagination.total}</strong> hasil
                 </div>
-                
                 <div class="flex items-center gap-2">
-                    <button 
-                        onclick={() => changePage(pagination.current_page - 1)}
-                        disabled={pagination.current_page === 1}
-                        class="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
+                    <button onclick={() => changePage(pagination.current_page - 1)} disabled={pagination.current_page === 1} class="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition">
                         Previous
                     </button>
-                    
                     <div class="hidden md:flex gap-1">
                         {#each Array(pagination.last_page) as _, i}
                             {@const p = i + 1}
                             {#if p === 1 || p === pagination.last_page || (p >= pagination.current_page - 1 && p <= pagination.current_page + 1)}
-                                <button 
-                                    onclick={() => changePage(p)}
-                                    class={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold transition ${pagination.current_page === p ? 'bg-brand-600 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                                >
+                                <button onclick={() => changePage(p)} class={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold transition ${pagination.current_page === p ? 'bg-brand-600 text-white shadow-md' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
                                     {p}
                                 </button>
                             {:else if p === pagination.current_page - 2 || p === pagination.current_page + 2}
@@ -236,12 +243,7 @@
                             {/if}
                         {/each}
                     </div>
-
-                    <button 
-                        onclick={() => changePage(pagination.current_page + 1)}
-                        disabled={pagination.current_page === pagination.last_page}
-                        class="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
+                    <button onclick={() => changePage(pagination.current_page + 1)} disabled={pagination.current_page === pagination.last_page} class="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition">
                         Next
                     </button>
                 </div>

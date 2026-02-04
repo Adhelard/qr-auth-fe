@@ -2,7 +2,7 @@
     import { onMount } from 'svelte';
     import { userState } from '$lib/stores/user.svelte';
     import { goto } from '$app/navigation';
-    import MerchantSidebar from '$lib/components/Layout/MerchantSidebar.svelte';
+    import MerchantSidebar from '$lib/components/layout/MerchantSidebar.svelte';
 
     let { children } = $props();
     let isChecking = $state(true);
